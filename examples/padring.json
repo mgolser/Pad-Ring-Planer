@@ -1,0 +1,22 @@
+{
+  "mode": "ccw",
+  "align": "center",
+  "square": false,
+  "cellh": 250.0,
+  "std": {
+    "pitch": 80.0,
+    "w": 70.0,
+    "h": 70.0
+  },
+  "rf": {
+    "pitch": 100.0,
+    "w": 70.0,
+    "h": 70.0
+  },
+  "sides": {
+    "T": "VSSA_MIX\nVSSA_MIX\nVDDA_MIX\nVDDA_MIX\nVSSA_MAIN\nVSSA_MAIN\nVSSA_MAIN\nVSSA_MAIN\nVDDA_MAIN\nVDDA_MAIN\nVDDA_MAIN\nVDDA_MAIN\nVSSA_SW\nVSSA_SW\nVDDA_SW\nVDDA_SW\n\n",
+    "R": "VDD_IO\nVDD_IO\nVSS_IO\nVSS_IO\nVREF\nIREF",
+    "B": "VDDA_SEC\nVDDA_SEC\nVSSA_SEC\nVSSA_SEC\n",
+    "L": "VDD_IO\nVDD_IO\nVSS_IO\nVSS_IO\nVDDD_MAIN\nVDDD_MAIN\nVSSD_MAIN\nVSSD_MAIN\n\nCLK_IN_50MHz\nRST_N\nSCLK\nMOSI\nMISO\nCS"
+  }
+}

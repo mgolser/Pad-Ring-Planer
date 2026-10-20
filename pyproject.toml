@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pad-ring-planer"
+dynamic = ["version"]
+description = "Plan IC pad ring pinouts with live die sizing, RF/GSG pad groups and exports."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Maximilian Golser" }]
+dependencies = ["PySide6"]
+
+[project.scripts]
+pad-ring-planer = "pad_ring_planer.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "pad_ring_planer.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

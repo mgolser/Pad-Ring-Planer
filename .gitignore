@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Local AI assistant files
+CLAUDE.md
+.claude/
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# LibreOffice lock files (XLSX checks)
+.~lock.*#
+
+# Output of examples/script_example.py
+out/
+
+# Old single-file version, replaced by src/pad_ring_planer
+/padring_planer_qt.py
+/padring.json
