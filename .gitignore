@@ -23,7 +23,3 @@ CLAUDE.md
 
 # Output of examples/script_example.py
 out/
-
-# Old single-file version, replaced by src/pad_ring_planer
-/padring_planer_qt.py
-/padring.json

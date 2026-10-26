@@ -16,7 +16,9 @@ Without installing: `PYTHONPATH=src python3 -m pad_ring_planer`.
 
 ## Entry syntax
 
-One line per entry, each side in numbering order:
+One line per entry. In the GUI each side lists its pads as seen on the die:
+top and bottom from left to right, left and right from top to bottom.
+Empty lines at the end of a side are ignored.
 
 | Entry | Meaning |
 |---|---|
@@ -49,6 +51,9 @@ prp.export_csv(project, "pins.csv")
 prp.export_svg(project, "ring.svg")
 prp.save(project, "chip.json")
 ```
+
+`project.sides` holds each side in numbering order; `project.physical_lines(side)` and
+`project.set_physical_lines(side, lines)` use the order as seen on the die, like the GUI.
 
 See [examples/script_example.py](examples/script_example.py). Command line export:
 

@@ -22,10 +22,8 @@ LAST_STATE = CONFIG_DIR / "last-qt.json"
 MODE_LABELS = [("ccw", "Counter-clockwise from top left (package)"),
                ("cw", "Clockwise from top left")]
 ALIGN_LABELS = [("center", "Centered"), ("start", "From start corner")]
-DIR = {
-    "ccw": {"L": "top → bottom", "B": "left → right", "R": "bottom → top", "T": "right → left"},
-    "cw": {"T": "left → right", "R": "top → bottom", "B": "right → left", "L": "bottom → top"},
-}
+# Editors list each side in physical order, as seen on the die
+EDITOR_DIR = {"T": "left → right", "R": "top → bottom", "B": "left → right", "L": "top → bottom"}
 PAD_FIELDS = ("pitch", "w", "h")
 
 
@@ -36,7 +34,7 @@ class MainWindow(QMainWindow):
         self.file = None
         self.selected = None
         self.layout_data = None
-        self.mode = "ccw"
+        self.project = None
         self._loading = False
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
@@ -65,57 +63,11 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self.setCentralWidget(splitter)
 
-        # left: settings + editors
+        # left: side editors, fixed order top, right, bottom, left
         left = QWidget()
         lv = QVBoxLayout(left)
         lv.setContentsMargins(8, 8, 4, 8)
         lv.setSpacing(8)
-
-        ring = QGroupBox("Ring")
-        rg = QGridLayout(ring)
-        self.cb_mode = QComboBox()
-        for key, label in MODE_LABELS:
-            self.cb_mode.addItem(label, key)
-        self.cb_align = QComboBox()
-        for key, label in ALIGN_LABELS:
-            self.cb_align.addItem(label, key)
-        self.chk_square = QCheckBox("Keep square")
-        self.sp_cellh = spin(120)
-        rg.addWidget(QLabel("Numbering"), 0, 0)
-        rg.addWidget(self.cb_mode, 0, 1, 1, 3)
-        rg.addWidget(QLabel("Short sides"), 1, 0)
-        rg.addWidget(self.cb_align, 1, 1)
-        rg.addWidget(self.chk_square, 1, 2, 1, 2)
-        rg.addWidget(QLabel("IO cell height"), 2, 0)
-        rg.addWidget(self.sp_cellh, 2, 1)
-        rg.setColumnStretch(3, 1)
-        lv.addWidget(ring)
-
-        pads = QGroupBox("Pads")
-        pg = QGridLayout(pads)
-        for c, t in enumerate(("", "Pitch", "Width", "Height"), start=0):
-            if t:
-                lab = QLabel(t)
-                lab.setStyleSheet(f"color: {pal['muted']};")
-                pg.addWidget(lab, 0, c)
-        self.sp = {}
-        for r, (key, label, vals) in enumerate((("std", "Standard", (80, 60, 60)),
-                                                ("rf", "RF / GSG", (100, 70, 70))), start=1):
-            pg.addWidget(QLabel(label), r, 0)
-            for c, (fld, v) in enumerate(zip(PAD_FIELDS, vals), start=1):
-                s = spin(v)
-                self.sp[(key, fld)] = s
-                pg.addWidget(s, r, c)
-        lv.addWidget(pads)
-
-        hint = QLabel(
-            "One line per pad, empty line = spacer slot, <code>NC</code> = no connection. "
-            "Force type: <code>[p] [g] [a] [rf] [d] [c] [nc]</code>. "
-            "Custom size <code>{80x60}</code>, custom pitch <code>@120</code>. "
-            "RF groups: <code>RFIN [gsg]</code>, <code>LO [gsgsg]</code>, <code>[gs]</code>, <code>[sg]</code>.")
-        hint.setWordWrap(True)
-        hint.setStyleSheet(f"color: {pal['muted']};")
-        lv.addWidget(hint)
 
         self.ed_box = QVBoxLayout()
         self.ed_box.setSpacing(6)
@@ -126,6 +78,16 @@ class MainWindow(QMainWindow):
             ed.edit.textChanged.connect(self.changed)
             self.editors[s] = ed
             self.ed_box.addWidget(ed, 1)
+
+        # syntax help below the editors
+        hint = QLabel(
+            "One line per pad, empty line = spacer slot, <code>NC</code> = no connection. "
+            "Force type: <code>[p] [g] [a] [rf] [d] [c] [nc]</code>. "
+            "Custom size <code>{80x60}</code>, custom pitch <code>@120</code>. "
+            "RF groups: <code>RFIN [gsg]</code>, <code>LO [gsgsg]</code>, <code>[gs]</code>, <code>[sg]</code>.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {pal['muted']};")
+        lv.addWidget(hint)
 
         splitter.addWidget(left)
 
@@ -165,7 +127,7 @@ class MainWindow(QMainWindow):
         pvl.addWidget(self.view, 1)
 
         stats = QHBoxLayout()
-        self.stat = {}
+        self.stat, self.stat_cap = {}, {}
         for key, label in (("pads", "Pads"), ("die", "Die (pad-limited)"), ("area", "Area"),
                            ("pg", "Power / Ground"), ("sig", "Analog / RF / Digital / Clock")):
             box = QFrame()
@@ -181,6 +143,7 @@ class MainWindow(QMainWindow):
             bl.addWidget(val)
             stats.addWidget(box, 1)
             self.stat[key] = val
+            self.stat_cap[key] = cap
         pvl.addLayout(stats)
         self.warn = QLabel()
         self.warn.setWordWrap(True)
@@ -215,16 +178,84 @@ class MainWindow(QMainWindow):
         self.table.itemSelectionChanged.connect(self.table_selected)
         pll.addWidget(self.table, 1)
         tabs.addTab(pl, "Pin List")
+        tabs.addTab(self._build_settings(), "Settings")
+        self.tabs = tabs
 
         self.cb_mode.currentIndexChanged.connect(self.mode_changed)
         self.cb_align.currentIndexChanged.connect(self.changed)
         self.chk_square.toggled.connect(self.changed)
+        self.chk_fixed.toggled.connect(self.fixed_die_toggled)
+        self.sp_die_w.valueChanged.connect(self.changed)
+        self.sp_die_h.valueChanged.connect(self.changed)
         self.sp_cellh.valueChanged.connect(self.changed)
         for s in self.sp.values():
             s.valueChanged.connect(self.changed)
 
         self.statusBar().showMessage("Click a pad to select its line · Ctrl+wheel zooms · "
                                      "middle mouse button pans")
+
+    def _build_settings(self):
+        pal = self.pal
+        page = QWidget()
+        sv = QVBoxLayout(page)
+        sv.setContentsMargins(10, 10, 10, 10)
+        sv.setSpacing(10)
+
+        die = QGroupBox("Die")
+        dg = QGridLayout(die)
+        self.chk_fixed = QCheckBox("Fixed die size")
+        self.sp_die_w = spin(2000, maximum=50000.0)
+        self.sp_die_h = spin(2000, maximum=50000.0)
+        dg.addWidget(self.chk_fixed, 0, 0)
+        dg.addWidget(QLabel("Width"), 0, 1)
+        dg.addWidget(self.sp_die_w, 0, 2)
+        dg.addWidget(QLabel("Height"), 0, 3)
+        dg.addWidget(self.sp_die_h, 0, 4)
+        note = QLabel("Including the IO ring. Unchecked, the die grows with the pads (pad-limited).")
+        note.setStyleSheet(f"color: {pal['muted']};")
+        dg.addWidget(note, 1, 0, 1, 6)
+        dg.setColumnStretch(5, 1)
+        sv.addWidget(die)
+
+        ring = QGroupBox("Ring")
+        rg = QGridLayout(ring)
+        self.cb_mode = QComboBox()
+        for key, label in MODE_LABELS:
+            self.cb_mode.addItem(label, key)
+        self.cb_align = QComboBox()
+        for key, label in ALIGN_LABELS:
+            self.cb_align.addItem(label, key)
+        self.chk_square = QCheckBox("Keep square")
+        self.sp_cellh = spin(120)
+        rg.addWidget(QLabel("Numbering"), 0, 0)
+        rg.addWidget(self.cb_mode, 0, 1, 1, 3)
+        rg.addWidget(QLabel("Short sides"), 1, 0)
+        rg.addWidget(self.cb_align, 1, 1)
+        rg.addWidget(self.chk_square, 1, 2, 1, 2)
+        rg.addWidget(QLabel("IO cell height"), 2, 0)
+        rg.addWidget(self.sp_cellh, 2, 1)
+        rg.setColumnStretch(3, 1)
+        sv.addWidget(ring)
+
+        pads = QGroupBox("Pads")
+        pg = QGridLayout(pads)
+        for c, t in enumerate(("", "Pitch", "Width", "Height"), start=0):
+            if t:
+                lab = QLabel(t)
+                lab.setStyleSheet(f"color: {pal['muted']};")
+                pg.addWidget(lab, 0, c)
+        self.sp = {}
+        for r, (key, label, vals) in enumerate((("std", "Standard", (80, 60, 60)),
+                                                ("rf", "RF / GSG", (100, 70, 70))), start=1):
+            pg.addWidget(QLabel(label), r, 0)
+            for c, (fld, v) in enumerate(zip(PAD_FIELDS, vals), start=1):
+                s = spin(v)
+                self.sp[(key, fld)] = s
+                pg.addWidget(s, r, c)
+        pg.setColumnStretch(4, 1)
+        sv.addWidget(pads)
+        sv.addStretch(1)
+        return page
 
     def _menus(self):
         mf = self.menuBar().addMenu("&File")
@@ -263,27 +294,32 @@ class MainWindow(QMainWindow):
             square=self.chk_square.isChecked(), cell_height=self.sp_cellh.value(),
             std=PadSettings(*(self.sp[("std", f)].value() for f in PAD_FIELDS)),
             rf=PadSettings(*(self.sp[("rf", f)].value() for f in PAD_FIELDS)),
+            fixed_die=self.chk_fixed.isChecked(),
+            die_width=self.sp_die_w.value(), die_height=self.sp_die_h.value(),
         )
         project = Project(settings)
         for s in SIDES:
-            project.set_side_text(s, self.editors[s].text())
+            project.set_physical_lines(s, split_lines(self.editors[s].text()))
         return project
 
     def set_project(self, project):
         st = project.settings.sanitized()
         self._loading = True
         try:
-            self.mode = st.mode
             self.cb_mode.setCurrentIndex(max(0, self.cb_mode.findData(st.mode)))
             self.cb_align.setCurrentIndex(max(0, self.cb_align.findData(st.align)))
             self.chk_square.setChecked(st.square)
             self.sp_cellh.setValue(st.cell_height)
+            self.chk_fixed.setChecked(st.fixed_die)
+            self.sp_die_w.setValue(st.die_width)
+            self.sp_die_h.setValue(st.die_height)
+            self._update_die_widgets()
             for key in ("std", "rf"):
                 pads = getattr(st, key)
                 for f in PAD_FIELDS:
                     self.sp[(key, f)].setValue(getattr(pads, f))
             for s in SIDES:
-                self.editors[s].set_text(project.side_text(s))
+                self.editors[s].set_text("\n".join(project.physical_lines(s)))
         finally:
             self._loading = False
         self.selected = None
@@ -296,15 +332,24 @@ class MainWindow(QMainWindow):
         self.setWindowModified(True)
         self.timer.start()
 
+    def fixed_die_toggled(self, checked):
+        if checked and not self._loading and self.layout_data:
+            # start from the current pad-limited size
+            self._loading = True
+            self.sp_die_w.setValue(self.layout_data.die_width)
+            self.sp_die_h.setValue(self.layout_data.die_height)
+            self._loading = False
+        self._update_die_widgets()
+        self.changed()
+
+    def _update_die_widgets(self):
+        fixed = self.chk_fixed.isChecked()
+        self.sp_die_w.setEnabled(fixed)
+        self.sp_die_h.setEnabled(fixed)
+        self.chk_square.setEnabled(not fixed)  # only applies to the pad-limited size
+
     def mode_changed(self, *_):
-        new = self.cb_mode.currentData()
-        if self._loading or new == self.mode:
-            return
-        self._loading = True
-        for s in SIDES:  # keep the physical position
-            self.editors[s].set_text("\n".join(reversed(split_lines(self.editors[s].text()))))
-        self._loading = False
-        self.mode = new
+        # The editors show physical order, so pads keep their place; only the numbering changes
         self.selected = None
         self.changed()
 
@@ -316,22 +361,21 @@ class MainWindow(QMainWindow):
 
     def render(self):
         project = self.get_project()
-        mode = project.settings.mode
         lay = project.layout(self.selected)
-        self.layout_data = lay
+        self.project, self.layout_data = project, lay
 
-        for i in reversed(range(self.ed_box.count())):
-            self.ed_box.takeAt(i)
-        for s in ORDER[mode]:
+        for s in SIDES:
             ed = self.editors[s]
-            self.ed_box.addWidget(ed, 1)
-            ed.dir.setText("· " + DIR[mode][s])
-            nos = [p.no for p in lay.pins_on(s)]
+            ed.dir.setText("· " + EDITOR_DIR[s])
+            nos = project.to_physical(s, [p.no for p in lay.pins_on(s)])
             ed.count.setText(f"{len(nos)} pads · {lay.side_length[s]:g} µm" + (f" · {nos[0]}–{nos[-1]}" if nos else ""))
-            ed.edit.set_labels(lay.gutter[s])
+            labels = project.to_physical(s, lay.gutter[s])
+            if project.is_reversed(s):  # group ranges descend as well, e.g. 29–25
+                labels = ["–".join(l.split("–")[::-1]) for l in labels]
+            ed.edit.set_labels(labels)
             sel_line = None
             if self.selected and self.selected.startswith(s + ":"):
-                sel_line = int(self.selected.split(":")[1])
+                sel_line = self._editor_line(self.selected)[1]
             ed.edit.highlight_line(sel_line)
 
         fill_scene(self.scene, lay, self.pal)
@@ -341,6 +385,7 @@ class MainWindow(QMainWindow):
         c = lay.counts
         ps = lay.pins_per_side
         self.stat["pads"].setText(f"{len(lay.pins)}  ({ps['T']}/{ps['R']}/{ps['B']}/{ps['L']})")
+        self.stat_cap["die"].setText("DIE (FIXED)" if lay.fixed_die else "DIE (PAD-LIMITED)")
         self.stat["die"].setText(f"{lay.die_width / 1000:.3f} × {lay.die_height / 1000:.3f} mm")
         self.stat["area"].setText(f"{lay.area_mm2:.3f} mm²")
         self.stat["pg"].setText(f"{c['pwr']} / {c['gnd']}")
@@ -369,8 +414,8 @@ class MainWindow(QMainWindow):
     def pad_clicked(self, tag):
         self.selected = tag
         self.render()
-        side, line = tag.split(":")
-        self.editors[side].edit.select_line(int(line))
+        side, line = self._editor_line(tag)
+        self.editors[side].edit.select_line(line)
         for r in range(self.table.rowCount()):
             if self.table.item(r, 0).data(Qt.ItemDataRole.UserRole) == tag:
                 self.table.blockSignals(True)
@@ -378,6 +423,11 @@ class MainWindow(QMainWindow):
                 self.table.blockSignals(False)
                 self.table.scrollToItem(self.table.item(r, 0))
                 break
+
+    def _editor_line(self, tag):
+        """Pin tag (side and line in numbering order) → (side, line index in the editor)."""
+        side, line = tag.split(":")
+        return side, self.project.physical_line_index(side, int(line))
 
     def pad_hover(self, tag):
         if not tag or not self.layout_data:

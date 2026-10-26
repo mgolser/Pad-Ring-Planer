@@ -10,8 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from .constants import ORDER, REV, SIDES, TYPES
-from .parse import expand, parse_line, split_lines
+from .constants import ORDER, REV, SIDE_NAMES, SIDES, TYPES
+from .parse import expand, parse_line
 
 
 @dataclass
@@ -52,6 +52,8 @@ class Layout:
     gutter: Dict[str, List[str]]       # pin number label per editor line
     margin: float                      # room for the pin names around the die
     prims: List[dict]                  # drawing primitives, see build_layout
+    fixed_die: bool = False            # die size given by the settings, not by the pads
+    side_space: Optional[Dict[str, float]] = None  # length available for pads per side
 
     @property
     def area_mm2(self):
@@ -75,7 +77,7 @@ def build_layout(project, selected=None):
     sides = {}
     for s in SIDES:
         entries = []
-        for i, line in enumerate(split_lines(project.side_text(s))):
+        for i, line in enumerate(project.sides.get(s, [])):
             e = parse_line(line)
             if e is None:
                 entries.append({"line": i, "blank": True, "pads": [], "width": P, "group": None})
@@ -88,12 +90,20 @@ def build_layout(project, selected=None):
         sides[s] = entries
 
     S = {s: sum(e["width"] for e in sides[s]) for s in SIDES}
-    if square:
+    warnings = []
+    if cfg.fixed_die:
+        # fixed die incl. IO ring; keep room for at least one pitch between the corners
+        e_tb = max(P, cfg.die_width - 2 * H)
+        e_lr = max(P, cfg.die_height - 2 * H)
+        if (e_tb + 2 * H, e_lr + 2 * H) != (cfg.die_width, cfg.die_height):
+            warnings.append(f"Fixed die size too small for the IO ring, using {e_tb + 2 * H:g} × {e_lr + 2 * H:g} µm")
+    elif square:
         e_tb = e_lr = max(P, *S.values())
     else:
         e_tb = max(P, S["T"], S["B"])
         e_lr = max(P, S["L"], S["R"])
     W, Hh = e_tb + 2 * H, e_lr + 2 * H
+    space = {s: e_tb if s in "TB" else e_lr for s in SIDES}
 
     pins, no = [], 0
     for s in ORDER[mode]:
@@ -215,7 +225,10 @@ def build_layout(project, selected=None):
     counts = {t: 0 for t in TYPES}
     for p in pins:
         counts[p["type"]] += 1
-    warnings = []
+    for s in SIDES:
+        if S[s] > space[s] + 1e-9:
+            warnings.append(f"Pads do not fit on the {SIDE_NAMES[s].lower()} side: "
+                            f"{S[s]:g} µm needed, {space[s]:g} µm available")
     seen, dup = set(), []
     for p in pins:
         if p["type"] in ("pwr", "gnd", "nc"):
@@ -252,4 +265,4 @@ def build_layout(project, selected=None):
     per_side = {s: sum(len(e["pads"]) for e in sides[s]) for s in SIDES}
     return Layout(pins=pin_objs, die_width=W, die_height=Hh, core_width=core_w, core_height=core_h,
                   side_length=S, pins_per_side=per_side, counts=counts, warnings=warnings,
-                  gutter=gutter, margin=margin, prims=prims)
+                  gutter=gutter, margin=margin, prims=prims, fixed_die=cfg.fixed_die, side_space=space)

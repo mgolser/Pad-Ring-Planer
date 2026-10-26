@@ -74,7 +74,73 @@ class ProjectApi(unittest.TestCase):
 
     def test_dict_round_trip(self):
         data = json.loads((ROOT / "examples" / "padring.json").read_text(encoding="utf-8"))
-        self.assertEqual(prp.Project.from_dict(data).to_dict(), data)
+        p = prp.Project.from_dict(data)
+        self.assertEqual(prp.Project.from_dict(p.to_dict()), p)
+        # older versions ignored empty lines at the end of a side
+        self.assertEqual(p.side_text("T"), data["sides"]["T"].rstrip("\n"))
+
+    def test_trailing_spacer_counts_in_api(self):
+        p = prp.Project()
+        p.sides["L"] = ["A"]
+        n = p.layout().side_length["L"]
+        p.sides["L"].append("")
+        self.assertEqual(p.layout().side_length["L"], n + p.settings.std.pitch)
+
+    def test_physical_order(self):
+        p = prp.Project.example()  # ccw: top and right are numbered against the geometry
+        lay = p.layout()
+        for side in "TRBL":
+            nos = p.to_physical(side, [x.no for x in lay.pins_on(side)])
+            key = (lambda n: lay.pins[n - 1].cx) if side in "TB" else (lambda n: lay.pins[n - 1].cy)
+            self.assertEqual(nos, sorted(nos, key=key), side)
+        self.assertEqual(p.physical_lines("T"), p.sides["T"][::-1])
+        self.assertEqual(p.physical_lines("L"), p.sides["L"])
+        self.assertEqual(p.physical_line_index("T", 0), len(p.sides["T"]) - 1)
+
+    def test_set_physical_lines_keeps_position_across_modes(self):
+        lines = ["A", "", "B [gsg]", "C"]
+        pos = {}
+        for mode in ("ccw", "cw"):
+            p = prp.Project()
+            p.settings.mode = mode
+            for side in "TRBL":
+                p.set_physical_lines(side, [f"{side}{x}" if x else x for x in lines])
+            pos[mode] = sorted((x.name, x.cx, x.cy) for x in p.layout().pins)
+        self.assertEqual(pos["ccw"], pos["cw"])
+
+    def test_fixed_die(self):
+        p = prp.Project.example()
+        auto = p.layout()
+        p.settings.fixed_die = True
+        p.settings.die_width, p.settings.die_height = 1500, 1200
+        lay = p.layout()
+        self.assertEqual((lay.die_width, lay.die_height), (1500, 1200))
+        self.assertTrue(lay.fixed_die)
+        self.assertEqual(lay.side_space["T"], 1500 - 2 * 120)
+        self.assertEqual(lay.warnings, [])
+        # centered pads keep their spacing, only the ring around them grows
+        dx = (1500 - auto.die_width) / 2
+        self.assertAlmostEqual(lay.pins[0].cy - auto.pins[0].cy, (1200 - auto.die_height) / 2)
+        self.assertAlmostEqual(lay.pins_on("T")[0].cx - auto.pins_on("T")[0].cx, dx)
+
+    def test_fixed_die_too_small(self):
+        p = prp.Project.example()
+        p.settings.fixed_die = True
+        p.settings.die_width, p.settings.die_height = 700, 100
+        lay = p.layout()
+        self.assertEqual((lay.die_width, lay.die_height), (700, 120 * 2 + 80))
+        self.assertTrue(lay.warnings[0].startswith("Fixed die size too small"))
+        self.assertIn("Pads do not fit on the left side: 720 µm needed, 80 µm available", lay.warnings)
+        self.assertIn("Pads do not fit on the top side: 740 µm needed, 460 µm available", lay.warnings)
+
+    def test_fixed_die_round_trip(self):
+        p = prp.Project.example()
+        p.settings.fixed_die = True
+        p.settings.die_width = 3000
+        d = p.to_dict()
+        self.assertEqual((d["fixed_die"], d["die_w"], d["die_h"]), (True, 3000, 2000.0))
+        self.assertEqual(prp.Project.from_dict(d), p)
+        self.assertFalse(prp.Project.from_dict({"sides": {}}).settings.fixed_die)
 
     def test_legacy_flat_pitch(self):
         p = prp.Project.from_dict({"pitch": 100, "sides": {"T": "A"}})
